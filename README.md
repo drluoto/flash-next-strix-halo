@@ -99,6 +99,11 @@ HSA_OVERRIDE_GFX_VERSION=11.5.1 GGML_CUDA_DISABLE_GRAPHS=1 \
   streams touch up to 40 expert sets — aggregate only 1.36× single-stream, and
   speculation stops helping entirely at `-np 4`. This model is a single-slot
   specialist on this hardware.
+- **MTP draft depth:** `n-max 6` with `--spec-draft-p-min 0.7` beats flat `n-max 3`
+  on nearly everything (+22% bugfix, +10% prose; credit sammcj). `draft-mtp` *alone*
+  beats the combo on bugfix and novel-code-at-depth (ngram drafts displace
+  higher-acceptance MTP drafts), while the combo wins echo-heavy file rewrites by
+  37% on ROCm — pick per workload; the combo is the better all-rounder for agents.
 - Long draft windows (`ngram-mod 256/16`) win file rewrites but drop bugfix
   workloads *below* baseline. `64/24` is the no-regression setting.
 - `-ot per_layer_token_embd=CPU` only saves RAM with `-lm mmap` (25× slower
