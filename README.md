@@ -110,6 +110,13 @@ The 4B draft head was cut out of the 360 GB checkpoint with HTTP range reads
 (5.2 GB fetched) using **[shard-scalpel](https://github.com/drluoto/shard-scalpel)**,
 then converted with #27836's `--mtp` export.
 
+## Changelog
+
+- **2026-08-29:** correctness follow-ups from [#27941](https://github.com/ggml-org/llama.cpp/pull/27941)
+  merged into the branch (M-RoPE image block scoring — matters if you use vision;
+  the `gridDim.y` abort at `n_kv` 262144 — matters at full context; sequence-copy
+  indexer keys). Revalidated on gfx1151.
+
 ## Credits
 
 The heavy lifting is other people's: **rmonsurate** (MTP implementation),
