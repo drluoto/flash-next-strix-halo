@@ -117,6 +117,10 @@ then converted with #27836's `--mtp` export.
 
 ## Changelog
 
+- **2026-08-30:** long-context decode fixes from [#27977](https://github.com/ggml-org/llama.cpp/pull/27977)
+  merged (early-exit ngram predecessor scan + gathered QSA decode window + indexer
+  kernel shape). File-rewrite @24k: 29.5 → **34.8 tok/s**; depth curve flattens
+  (@32k now decodes like @16k did before). Gains grow with context.
 - **2026-08-29:** correctness follow-ups from [#27941](https://github.com/ggml-org/llama.cpp/pull/27941)
   merged into the branch (M-RoPE image block scoring — matters if you use vision;
   the `gridDim.y` abort at `n_kv` 262144 — matters at full context; sequence-copy
