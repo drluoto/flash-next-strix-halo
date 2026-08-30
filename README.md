@@ -81,6 +81,19 @@ HSA_OVERRIDE_GFX_VERSION=11.5.1 GGML_CUDA_DISABLE_GRAPHS=1 \
   --host 127.0.0.1 --port 8097
 ```
 
+## Session affinity: the fix that felt biggest
+
+If your server serves an agent that shares the slot with cron jobs or delegations,
+every session switch evicts the cache and the next turn re-prefills everything —
+1.5–4 minutes at ~30k ctx. Fix: `-np 3 --ctx-checkpoints 8`. The server routes each
+request to the most similar slot (LCP), so sessions keep their own warm cache.
+Return TTFT on real traces: 21–251 s → **0.3–0.5 s**. Checkpoints are mandatory
+(recurrent GDN layers can't roll back), and slot save/restore to disk does *not*
+work as an alternative — restore reports success and perfect similarity, then
+re-prefills anyway, because the recurrent checkpoint stack isn't in the state file.
+Sequential turns make the extra slots ~free; concurrent streams don't (see fleet
+note below).
+
 ## Pitfalls we hit so you don't have to
 
 - **`GGML_CUDA_DISABLE_GRAPHS=1` is required on ROCm < 7.13** with the hipCUB
