@@ -1,5 +1,7 @@
 # Qwen3.8-Flash-Next on Strix Halo: 17 → 47 tok/s
 
+*A [Vitronia](https://github.com/drluoto) project.*
+
 A working, measured, reproducible stack for running **Qwen3.8-Flash-Next**
 (125B-A6B MoE + 51B engram table, `qwen4exp`) on **AMD Ryzen AI Max+ 395 /
 Radeon 8060S (gfx1151, 128 GB unified)** with llama.cpp — including the first
