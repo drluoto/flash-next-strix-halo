@@ -1,150 +1,93 @@
-# Qwen3.8-Flash-Next on Strix Halo: 17 → 47 tok/s
+# Qwen3.8-Flash-Next on Strix Halo: 30 to 58 tokens per second
 
-*A [Vitronia](https://github.com/drluoto) project.*
+*A [Vitronia](https://github.com/drluoto/flash-next-strix-halo) project.*
 
-A working, measured, reproducible stack for running **Qwen3.8-Flash-Next**
-(125B-A6B MoE + 51B engram table, `qwen4exp`) on **AMD Ryzen AI Max+ 395 /
-Radeon 8060S (gfx1151, 128 GB unified)** with llama.cpp — including the first
-working native MTP speculative decoding on ROCm.
+> **17 Sep 2026 — this is now a Vulkan stack, not ROCm.** ROCm is faster at reading
+> prompts and returns wrong answers on this chip without telling you. Old ROCm
+> numbers are at the bottom.
 
-Everything here was measured on real coding workloads (file rewrite, targeted
-bugfix, new code, prose) at 8k and 24k context, greedy, with output read for
-correctness — not just tok/s. Raw threads with full data:
-[#26592](https://github.com/ggml-org/llama.cpp/pull/26592),
-[#27466](https://github.com/ggml-org/llama.cpp/pull/27466),
-[#27836](https://github.com/ggml-org/llama.cpp/pull/27836).
+This is a project to continuously optimise the Qwen3.8-Flash MoE model for my
+Strix Halo. Some of the optimisations may be relevant to other hardware. Presently
+this is the best stack I have found out there; some of the dev work is my own and
+some is building on community releases. Hope it may be of use for some of you. When
+I have time I try to merge upstream.
 
-## Results (UD-IQ4_XS, single stream)
+125B model, one mini PC, 128 GB shared memory, no cloud.
 
-| decode tok/s | file rewrite | bugfix | new code | prose |
-|---|---|---|---|---|
-| no speculation, 8k ctx | 16.8 | 16.3 | 16.8 | 20.7 |
-| **full stack, 8k ctx** | **47.1** | 24.7–40 | **31.7** | **24.1** |
-| no speculation, 24k ctx | ~15 | | ~15 | |
-| **full stack, 24k ctx** | **28.6** | | **25.4** | |
+## Speed
 
-Prefill ~340 tok/s empty, ~200 at 24k. Model + 262k context + vision:
-~106 GB of 128. Quality gates: greedy output clean at long prompts, arithmetic
-in exact format at 24k depth, tool calling, vision — all verified, plus two
-30-minute mixed-load soaks with zero errors.
+One request at a time, temp 0, no prompt cache.
 
-## The stack
+| Workload | tok/s |
+|---|---:|
+| short code, empty context | 58 |
+| new code @8k | 42 |
+| prose @8k | 30 |
+| file rewrite @8k | 55 |
+| new code @32k | 38 |
+| file rewrite @32k | 49 |
 
-Three composable levers on top of master:
+Prompt reading: 510 tok/s at 8k, 390 at 32k.
 
-1. **GPU TOP_K** — the QSA sparse-attention indexer runs `ggml_top_k` over the
-   whole context, 12×/token. Stock llama.cpp on HIP falls back to **CPU** past
-   1024 elements (no CUB), which is why decode collapses with depth (knee at
-   exactly d1024). Fix: hipCUB ([#26592](https://github.com/ggml-org/llama.cpp/pull/26592))
-   or the native radix kernel ([#27466](https://github.com/ggml-org/llama.cpp/pull/27466)).
-   +21 % decode at 16k depth, +38–53 % end-to-end at 24k.
-2. **Native MTP** ([#27836](https://github.com/ggml-org/llama.cpp/pull/27836)) —
-   the model's own 4B draft head. Needs crusaderky's detached-head loader fix
-   and a converter whitelist fix ([rmonsurate/llama.cpp#1](https://github.com/rmonsurate/llama.cpp/pull/1)).
-   Output is byte-clean (earlier community MTP ports corrupted above ~1k prompt
-   tokens — always read the output, 42 tok/s of noise still reports 42 tok/s).
-3. **ngram-mod** — draft from text already in context; free, huge on file
-   rewrites. Composes with MTP: `--spec-type draft-mtp,ngram-mod`.
+Prose is the floor. The model can't guess its own prose, so speculation buys nothing
+there. File rewrite is the ceiling because the output is mostly already in the input.
+Turn the draft depth up and rewrite hits 63, but we don't run that daily.
 
-Pre-assembled branch (all of the above, with attribution):
-**[`drluoto/llama.cpp` → `strix-halo-flash-next`](https://github.com/drluoto/llama.cpp/tree/strix-halo-flash-next)**
+## What got us here
 
-MTP sidecar (converted from the official checkpoint, sha256 in the card):
-**[`drluoto/Qwen3.8-Flash-Next-MTP-GGUF`](https://huggingface.co/drluoto/Qwen3.8-Flash-Next-MTP-GGUF)**
+The draft head is most of it. The model ships with a small head that predicts the next
+few tokens; the big model verifies them in one pass. We cut its vocabulary to the 65k
+tokens our work actually uses.
 
-## Build (gfx1151, Ubuntu ROCm packages)
+Session affinity was the surprise. Pinning a conversation to one slot took cold start
+from 44 seconds to under one.
 
-```sh
-git clone -b strix-halo-flash-next https://github.com/drluoto/llama.cpp
-cd llama.cpp
-cmake -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1151 -DGPU_TARGETS=gfx1151 \
-  -DGGML_HIP_ROCWMMA_FATTN=ON -DGGML_HIP_MMQ_MFMA=ON -DGGML_HIP_NO_VMM=ON \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j --target llama-server
-```
+The rest is kernel work, some ours, some picked up from others on this chip. One of
+ours is [upstream](https://github.com/ggml-org/llama.cpp/pull/28501).
 
-`GGML_HIP_NO_VMM=ON` is mandatory on gfx1151 (HIP VMM crashes at graph exec).
-If cmake resolves `/opt/rocm` into a broken path, pin
-`-Dhip_DIR=/usr/lib/x86_64-linux-gnu/cmake/hip -Damd_comgr_DIR=/usr/lib/x86_64-linux-gnu/cmake/amd_comgr`.
+## Don't bother with
 
-## Run
+**ROCm.** Wrong logits for any prompt longer than the batch size, silently. Four open
+bugs. Perplexity 84.8 against Vulkan's 13.8 on identical settings.
+
+**N-gram drafting.** Each verification costs 230–480 ms on Vulkan. Loses on everything
+except prose, where it breaks even.
+
+**Quantised KV cache.** Saves a gigabyte, wrecks tool calling. You have 128 GB.
+
+**A bigger TTM page pool.** We set it near the size of RAM. The driver then holds onto
+pages the kernel needs and the machine deadlocks in `drm_suballoc_new`, unkillable,
+reboot only. Cost us four reboots before we found it. Leave it at the default.
+
+## Setup
+
+Ryzen AI Max+ 395, 128 GB, Radeon 8060S. Qwen3.8-Flash-Next requantised to 86 GB —
+the trunk kept at higher precision than stock, since it's read every token and the
+experts aren't. Draft head [on Hugging Face](https://huggingface.co/drluoto/Qwen3.8-Flash-Next-MTP-GGUF).
+Engine: [`drluoto/llama.cpp`, branch `strix-halo-vulkan`](https://github.com/drluoto/llama.cpp/tree/strix-halo-vulkan).
 
 ```sh
-HSA_OVERRIDE_GFX_VERSION=11.5.1 GGML_CUDA_DISABLE_GRAPHS=1 \
-./build/bin/llama-server \
-  -m Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf \
-  -md mtp-Qwen3.8-Flash-Next-Q8_0.gguf \
-  --spec-type draft-mtp,ngram-mod --spec-draft-n-max 3 \
-  --spec-ngram-mod-n-max 64 --spec-ngram-mod-n-match 24 \
-  --mmproj mmproj-F16.gguf \
-  -lm dio -fa 1 -ctk f16 -ctv f16 -c 262144 -np 1 --jinja \
-  --host 127.0.0.1 --port 8097
+llama-server -m trunk-q5k-00001-of-00003.gguf \
+  -md mtp-Qwen3.8-Flash-Next-Q8_0-frspec-65k.gguf \
+  --spec-type draft-mtp --spec-draft-n-max 3 --spec-draft-p-min 0.0 \
+  -fa 1 -ub 2048 -b 2048 -c 262144 -np 2 -lm mmap --jinja
 ```
 
-## Session affinity: the fix that felt biggest
+`-lm mmap` matters: it lets the kernel reclaim the 29 GB lookup table under pressure
+instead of OOM-killing the server. Read the table into cache once after startup and it
+costs nothing.
 
-If your server serves an agent that shares the slot with cron jobs or delegations,
-every session switch evicts the cache and the next turn re-prefills everything —
-1.5–4 minutes at ~30k ctx. Fix: `-np 3 --ctx-checkpoints 8`. The server routes each
-request to the most similar slot (LCP), so sessions keep their own warm cache.
-Return TTFT on real traces: 21–251 s → **0.3–0.5 s**. Checkpoints are mandatory
-(recurrent GDN layers can't roll back), and slot save/restore to disk does *not*
-work as an alternative — restore reports success and perfect similarity, then
-re-prefills anyway, because the recurrent checkpoint stack isn't in the state file.
-Sequential turns make the extra slots ~free; concurrent streams don't (see fleet
-note below).
+## Old ROCm numbers (Aug 2026)
 
-## Pitfalls we hit so you don't have to
+ROCm 7.1, stock UD-IQ4_XS. Kept for anyone who followed the earlier writeup.
 
-- **`GGML_CUDA_DISABLE_GRAPHS=1` is required on ROCm < 7.13** with the hipCUB
-  path: rocPRIM's `DeviceSegmentedRadixSort` is not capture-safe until 4.4.0
-  (crashes `operation not permitted when stream is capturing` mid-generation).
-  The capture guard lands in ROCm 7.13+ (per Geramy in #26592). HIP graphs are
-  worth ~nothing on this model anyway (measured 26.0 vs 27.0 tok/s).
-- **Don't tune with `llama-bench` if you run speculation.** It benches without
-  speculation; `-ub 2048` won its prefill chart and *halved* real decode
-  (22.0 vs 40.9) while eating 12 GB, which made full 262k context look
-  impossible when it actually fits.
-- **`--load-mode dio`** loads the 93 GB model in ~33 s; mmap takes 3–13 min on
-  this platform.
-- **Read the output.** The broken MTP fork measured a genuine-looking
-  42.7 tok/s while emitting multilingual noise — corruption began between 718
-  and 2668 prompt tokens, so every short smoke test passed.
-- **Fleet serving is not worth it**: 512 experts × top-10 means 4 parallel
-  streams touch up to 40 expert sets — aggregate only 1.36× single-stream, and
-  speculation stops helping entirely at `-np 4`. This model is a single-slot
-  specialist on this hardware.
-- **MTP draft depth:** `n-max 6` with `--spec-draft-p-min 0.7` beats flat `n-max 3`
-  on nearly everything (+22% bugfix, +10% prose; credit sammcj). `draft-mtp` *alone*
-  beats the combo on bugfix and novel-code-at-depth (ngram drafts displace
-  higher-acceptance MTP drafts), while the combo wins echo-heavy file rewrites by
-  37% on ROCm — pick per workload; the combo is the better all-rounder for agents.
-- Long draft windows (`ngram-mod 256/16`) win file rewrites but drop bugfix
-  workloads *below* baseline. `64/24` is the no-regression setting.
-- `-ot per_layer_token_embd=CPU` only saves RAM with `-lm mmap` (25× slower
-  load); with everything resident it saves nothing. With 128 GB you don't need it.
+| Workload | no spec | with draft head |
+|---|---:|---:|
+| file rewrite @8k | 17 | 47 |
+| new code @8k | 17 | 32 |
+| file rewrite @24k | 15 | 29 |
+| new code @24k | 15 | 25 |
 
-## Extracting the MTP head yourself
+---
 
-The 4B draft head was cut out of the 360 GB checkpoint with HTTP range reads
-(5.2 GB fetched) using **[shard-scalpel](https://github.com/drluoto/shard-scalpel)**,
-then converted with #27836's `--mtp` export.
-
-## Changelog
-
-- **2026-08-30:** long-context decode fixes from [#27977](https://github.com/ggml-org/llama.cpp/pull/27977)
-  merged (early-exit ngram predecessor scan + gathered QSA decode window + indexer
-  kernel shape). File-rewrite @24k: 29.5 → **34.8 tok/s**; depth curve flattens
-  (@32k now decodes like @16k did before). Gains grow with context.
-- **2026-08-29:** correctness follow-ups from [#27941](https://github.com/ggml-org/llama.cpp/pull/27941)
-  merged into the branch (M-RoPE image block scoring — matters if you use vision;
-  the `gridDim.y` abort at `n_kv` 262144 — matters at full context; sequence-copy
-  indexer keys). Revalidated on gfx1151.
-
-## Credits
-
-The heavy lifting is other people's: **rmonsurate** (MTP implementation),
-**crusaderky** (detached-head loader), **Geramy** (hipCUB path + rocPRIM
-diagnosis), **jadenmach2** (radix TOP_K), **danielhanchen/Unsloth** (qwen4exp
-port + quants), **JJJYmmm/Qwen** (original arch PR). This repo is the
-measurement work and the assembly.
+Built with Claude Fable 5.1. A Vitronia project.
