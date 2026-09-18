@@ -43,7 +43,8 @@ Session affinity was the surprise. Pinning a conversation to one slot took cold 
 from 44 seconds to under one.
 
 The rest is kernel work, some ours, some picked up from others on this chip. One of
-ours is [upstream](https://github.com/ggml-org/llama.cpp/pull/28501).
+ours is [merged upstream](https://github.com/ggml-org/llama.cpp/pull/28501) — raising
+the hoisted row-id limit so 512-expert models stop falling back to the scan path.
 
 ## Don't bother with
 
@@ -61,10 +62,19 @@ reboot only. Cost us four reboots before we found it. Leave it at the default.
 
 ## Setup
 
-Ryzen AI Max+ 395, 128 GB, Radeon 8060S. Qwen3.8-Flash-Next requantised to 86 GB —
-the trunk kept at higher precision than stock, since it's read every token and the
-experts aren't. Draft head [on Hugging Face](https://huggingface.co/drluoto/Qwen3.8-Flash-Next-MTP-GGUF).
-Engine: [`drluoto/llama.cpp`, branch `strix-halo-vulkan`](https://github.com/drluoto/llama.cpp/tree/strix-halo-vulkan).
+Ryzen AI Max+ 395, 128 GB, Radeon 8060S.
+
+- **Model:** [AgenticRequant Q5K](https://huggingface.co/drluoto/Qwen3.8-Flash-Next-AgenticRequant-Q5K-GGUF)
+  — Qwen3.8-Flash-Next requantised by measured read frequency. The trunk is read in
+  full on every token and the experts aren't, so the bits went to the trunk.
+  +13 % decode over stock, 1.4 GB smaller, 0.91 % perplexity. Recipe and numbers in
+  the repo.
+- **Draft head:** [MTP sidecar](https://huggingface.co/drluoto/Qwen3.8-Flash-Next-MTP-GGUF),
+  vocabulary trimmed to the 65k tokens real agent traces actually use.
+- **Engine:** [`drluoto/llama.cpp`, branch `strix-halo-vulkan`](https://github.com/drluoto/llama.cpp/tree/strix-halo-vulkan).
+- **Pin the GPU clock.** `rocm-smi -d 0 --setperflevel high`. On `auto` the clock
+  floats 2340–2540 MHz against a 2900 max and you lose about 20 % — it also makes
+  every A/B you run meaningless.
 
 ```sh
 llama-server -m trunk-q5k-00001-of-00003.gguf \
